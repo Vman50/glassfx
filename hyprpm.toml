@@ -1,0 +1,8 @@
+[metadata]
+name = "glassfx"
+description = "Per-window GLSL shader system for Hyprland"
+author = "Vman50"
+version = "1.0"
+
+[build]
+cmake = true
