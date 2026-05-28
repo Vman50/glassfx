@@ -19,6 +19,7 @@ add_library(glassfx SHARED
     src/ShaderManager.cpp
     src/Config.cpp
     src/Dispatchers.cpp
+    src/TransformerCompat.cpp
 )
 
 target_include_directories(glassfx PRIVATE
@@ -37,7 +38,6 @@ target_link_libraries(glassfx PRIVATE
     ${GLESV2_LIBRARIES}
     ${EGL_LIBRARIES}
     ${WAYLAND_SERVER_LIBRARIES}
-    -Wl,--allow-shlib-undefined
 )
 
 target_compile_options(glassfx PRIVATE
