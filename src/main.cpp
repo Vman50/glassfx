@@ -1,6 +1,9 @@
 #include <hyprland/src/plugins/PluginAPI.hpp>
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/Compositor.hpp>
+#include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
+#include <hyprutils/os/FileDescriptor.hpp>
+#include <unistd.h>
 
 #include "ShaderSystem.hpp"
 #include "ShaderManager.hpp"
@@ -72,6 +75,18 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO pluginInit(HANDLE handle) {
     });
 
     g_pShaderSystem->startInotify();
+    {
+        int rawFd = g_pShaderSystem->inotifyFd();
+        if (rawFd >= 0) {
+            int dupFd = dup(rawFd);
+            if (dupFd >= 0) {
+                Hyprutils::OS::CFileDescriptor cfd(dupFd);
+                g_pEventLoopManager->doOnReadable(std::move(cfd), []() {
+                    if (g_pShaderSystem) g_pShaderSystem->onInotifyReadable();
+                });
+            }
+        }
+    }
 
     HyprlandAPI::addNotification(handle, "[GlassFX] Plugin loaded", CHyprColor{0.2f, 0.8f, 0.2f, 1.0f}, 3000);
 

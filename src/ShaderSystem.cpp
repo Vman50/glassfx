@@ -1,6 +1,4 @@
 #include "ShaderSystem.hpp"
-#include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
-#include <hyprutils/os/FileDescriptor.hpp>
 
 #include <GLES3/gl32.h>
 #include <fstream>
@@ -13,7 +11,7 @@
 #include <cmath>
 #include <algorithm>
 #include <unistd.h>
-#include <hyprland/src/debug/log/Logger.hpp>
+#include <cstdio>
 
 namespace fs = std::filesystem;
 
@@ -44,7 +42,17 @@ ShaderSystem::ShaderSystem() {
     clock_gettime(CLOCK_MONOTONIC, &m_startTime);
 
     const char* home = getenv("HOME");
-    m_userShaderDir   = home ? std::string(home) + "/.config/hypr/shaders/glassfx" : "";
+    m_userShaderDir = home ? std::string(home) + "/.config/hypr/shaders/glassfx" : "";
+
+    m_logFn = [](const std::string& msg) { fprintf(stderr, "%s\n", msg.c_str()); };
+}
+
+void ShaderSystem::setShaderDir(const std::string& dir) {
+    m_userShaderDir = dir;
+}
+
+void ShaderSystem::setLogCallback(std::function<void(const std::string&)> fn) {
+    m_logFn = std::move(fn);
 }
 
 ShaderSystem::~ShaderSystem() {
@@ -78,9 +86,7 @@ void ShaderSystem::shutdown() {
     if (m_blurVao)     { glDeleteVertexArrays(1, &m_blurVao); m_blurVao = 0; }
     if (m_blurVbo)     { glDeleteBuffers(1, &m_blurVbo); m_blurVbo = 0; }
 
-    // m_inotifyFd is owned by the EventLoop's CFileDescriptor after startInotify();
-    // do not close() it here or we'll double-close.
-    m_inotifyFd = -1;
+    if (m_inotifyFd >= 0) { close(m_inotifyFd); m_inotifyFd = -1; }
 }
 
 void ShaderSystem::startInotify() {
@@ -91,9 +97,6 @@ void ShaderSystem::startInotify() {
 
     m_inotifyWd1 = inotify_add_watch(m_inotifyFd, m_userShaderDir.c_str(),
                                       IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE);
-
-    Hyprutils::OS::CFileDescriptor fd(m_inotifyFd);
-    g_pEventLoopManager->doOnReadable(std::move(fd), [this]() { onInotifyReadable(); });
 }
 
 void ShaderSystem::onInotifyReadable() {
@@ -108,7 +111,7 @@ void ShaderSystem::onInotifyReadable() {
                 std::string name(ev->name);
                 if (name.size() > 5 && name.substr(name.size()-5) == ".frag") {
                     std::string path = m_userShaderDir + "/" + name;
-                    Log::logger->log(Log::DEBUG, "[GlassFX] Hot-reloading: {}", path);
+                    m_logFn("[GlassFX] Hot-reloading: " + path);
                     loadFile(path);
                 }
             }
@@ -136,7 +139,7 @@ std::string ShaderSystem::readFile(const std::string& path) {
 bool ShaderSystem::loadFile(const std::string& path) {
     std::string src = readFile(path);
     if (src.empty()) {
-        Log::logger->log(Log::ERR, "[GlassFX] Could not read: {}", path);
+        m_logFn("[GlassFX] Could not read: " + path);
         return false;
     }
 
@@ -149,7 +152,7 @@ bool ShaderSystem::loadFile(const std::string& path) {
     }
 
     if (!compileShader(cs, src)) {
-        Log::logger->log(Log::ERR, "[GlassFX] Shader compile failed: {}", path);
+        m_logFn("[GlassFX] Shader compile failed: " + path);
         // Install passthrough fallback
         CompiledShader fb;
         fb.path = path;
@@ -166,7 +169,7 @@ bool ShaderSystem::loadFile(const std::string& path) {
     std::lock_guard<std::mutex> lock(m_mutex);
     releaseShader(cs.name);
     m_shaders[cs.name] = std::move(cs);
-    Log::logger->log(Log::DEBUG, "[GlassFX] Loaded shader: {}", m_shaders[cs.name].name);
+    m_logFn("[GlassFX] Loaded shader: " + m_shaders[cs.name].name);
     return true;
 }
 
@@ -291,7 +294,7 @@ bool ShaderSystem::compileShader(CompiledShader& cs, const std::string& fragSrc)
     if (!ok) {
         char log[1024];
         glGetShaderInfoLog(vert, sizeof(log), nullptr, log);
-        Log::logger->log(Log::ERR, "[GlassFX] Vertex compile error: {}", log);
+        m_logFn(std::string("[GlassFX] Vertex compile error: ") + log);
         glDeleteShader(vert);
         return false;
     }
@@ -337,7 +340,7 @@ out vec4 fragColor;
     if (!ok) {
         char log[4096];
         glGetShaderInfoLog(frag, sizeof(log), nullptr, log);
-        Log::logger->log(Log::ERR, "[GlassFX] Fragment compile error in {}: {}", cs.path, log);
+        m_logFn("[GlassFX] Fragment compile error in " + cs.path + ": " + log);
         glDeleteShader(vert);
         glDeleteShader(frag);
         return false;
@@ -356,7 +359,7 @@ out vec4 fragColor;
     if (!ok) {
         char log[1024];
         glGetProgramInfoLog(prog, sizeof(log), nullptr, log);
-        Log::logger->log(Log::ERR, "[GlassFX] Link error: {}", log);
+        m_logFn(std::string("[GlassFX] Link error: ") + log);
         glDeleteProgram(prog);
         return false;
     }
@@ -465,7 +468,7 @@ void main() {
     if (!ok) {
         char log[1024];
         glGetProgramInfoLog(m_blurProgram, sizeof(log), nullptr, log);
-        Log::logger->log(Log::ERR, "[GlassFX] Blur program link error: {}", log);
+        m_logFn(std::string("[GlassFX] Blur program link error: ") + log);
         glDeleteProgram(m_blurProgram);
         m_blurProgram = 0;
         return;

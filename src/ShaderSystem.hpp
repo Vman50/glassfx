@@ -4,6 +4,7 @@
 #include <vector>
 #include <unordered_map>
 #include <mutex>
+#include <functional>
 #include <GLES3/gl32.h>
 
 enum class ParamType { FLOAT, VEC2, VEC3, VEC4, COLOR };
@@ -47,6 +48,9 @@ class ShaderSystem {
     void                                     init();
     void                                     shutdown();
 
+    void                                     setShaderDir(const std::string& dir);
+    void                                     setLogCallback(std::function<void(const std::string&)> fn);
+
     // Returns nullptr if not found
     CompiledShader*                          getShader(const std::string& name);
     std::vector<std::string>                 listShaders() const;
@@ -59,10 +63,12 @@ class ShaderSystem {
     float                                    pluginTime() const;
 
     // Renders a blurred copy of srcTex into dstFbo at (dstW x dstH).
-    // Used by GlassFXTransformer to provide a meaningful u_background.
     void                                     blurInto(GLuint srcTex, GLuint dstFbo, int dstW, int dstH);
 
+    // Sets up the inotify watch; call inotifyFd() afterwards to integrate with an event loop.
     void                                     startInotify();
+    int                                      inotifyFd() const { return m_inotifyFd; }
+    void                                     onInotifyReadable();
 
   private:
     std::unordered_map<std::string, CompiledShader> m_shaders;
@@ -71,6 +77,7 @@ class ShaderSystem {
     GLuint m_noiseTex = 0;
 
     std::string m_userShaderDir;
+    std::function<void(const std::string&)> m_logFn;
 
     int  m_inotifyFd  = -1;
     int  m_inotifyWd1 = -1;
@@ -95,7 +102,6 @@ class ShaderSystem {
     void        releaseShader(const std::string& name);
     static void parseParamValue(const std::string& valStr, ParamType type, float* out);
     static std::string stripVersion(const std::string& src);
-    void        onInotifyReadable();
     static std::string readFile(const std::string& path);
 };
 
