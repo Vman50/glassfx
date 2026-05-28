@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.19)
-project(glassfx CXX)
+project(glassfx C CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -86,8 +86,18 @@ if(Qt6_FOUND AND Qt6Quick_FOUND AND Qt6WaylandClient_FOUND)
 
     qt6_generate_wayland_protocol_client_sources(glassfx-qs
         FILES
+            ${QS_PROTO_DIR}/ext-foreign-toplevel-list-v1.xml
             ${QS_PROTO_DIR}/ext-image-capture-source-v1.xml
             ${QS_PROTO_DIR}/ext-image-copy-capture-v1.xml)
+
+    # qt6_generate_wayland_protocol_client_sources only adds the Qt C++ wrappers;
+    # explicitly compile the raw Wayland C protocol data files for the *_interface symbols.
+    set(PROTO_C_FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/wayland-ext-foreign-toplevel-list-v1-protocol.c
+        ${CMAKE_CURRENT_BINARY_DIR}/wayland-ext-image-capture-source-v1-protocol.c
+        ${CMAKE_CURRENT_BINARY_DIR}/wayland-ext-image-copy-capture-v1-protocol.c)
+    set_source_files_properties(${PROTO_C_FILES} PROPERTIES GENERATED TRUE LANGUAGE C)
+    target_sources(glassfx-qs PRIVATE ${PROTO_C_FILES})
 
     set_target_properties(glassfx-qs PROPERTIES
         AUTOMOC ON
