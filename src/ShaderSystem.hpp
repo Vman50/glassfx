@@ -58,6 +58,10 @@ class ShaderSystem {
     GLuint                                   noiseTexture() const { return m_noiseTex; }
     float                                    pluginTime() const;
 
+    // Renders a blurred copy of srcTex into dstFbo at (dstW x dstH).
+    // Used by GlassFXTransformer to provide a meaningful u_background.
+    void                                     blurInto(GLuint srcTex, GLuint dstFbo, int dstW, int dstH);
+
     void                                     startInotify();
 
   private:
@@ -67,11 +71,16 @@ class ShaderSystem {
     GLuint m_noiseTex = 0;
 
     std::string m_userShaderDir;
-    std::string m_builtinShaderDir;
 
     int  m_inotifyFd  = -1;
     int  m_inotifyWd1 = -1;
-    int  m_inotifyWd2 = -1;
+
+    // Internal blur program used to populate u_background.
+    GLuint m_blurProgram = 0;
+    GLuint m_blurVao     = 0;
+    GLuint m_blurVbo     = 0;
+    GLint  m_blurULoc_tex        = -1;
+    GLint  m_blurULoc_resolution = -1;
 
     struct timespec m_startTime {};
 
@@ -82,6 +91,8 @@ class ShaderSystem {
     void        cacheUniformLocations(CompiledShader& cs);
     void        buildQuadGeometry(CompiledShader& cs);
     void        generateNoise();
+    void        compileBlurProgram();
+    void        releaseShader(const std::string& name);
     static void parseParamValue(const std::string& valStr, ParamType type, float* out);
     static std::string stripVersion(const std::string& src);
     void        onInotifyReadable();

@@ -2,10 +2,10 @@
 // @pass    surface
 // @params  viscosity=0.98 dye_decay=0.99 injection_radius=0.04
 
-uniform sampler2D u_state;
+// u_state holds velocity in .rg and dye in .b.
+// u_state_pass = 1 during the state update render, 0 during display.
 
-// Velocity field in RG, dye in BA
-// Simple advection-only Eulerian fluid with mouse-driven injection
+uniform sampler2D u_state;
 
 void main() {
     vec2 uv = v_uv;
@@ -13,16 +13,14 @@ void main() {
 
     vec4 prev = texture(u_state, uv);
     vec2 vel  = prev.rg;
-    vec3 dye  = prev.bbb; // just brightness
 
-    // Advect: sample from where the fluid came from
     vec2 advUv = clamp(uv - vel * px * 2.0, vec2(0.0), vec2(1.0));
     vec4 advected = texture(u_state, advUv);
     vec2 newVel = advected.rg * u_viscosity;
     float newDye = advected.b * u_dye_decay;
 
-    // Mouse injection
-    vec2 mouseUv = u_mouse / u_resolution;
+    // Mouse injection in window-local UV space.
+    vec2 mouseUv = clamp((u_mouse - u_surface_pos) / u_surface_size, vec2(0.0), vec2(1.0));
     float mouseDist = length(uv - mouseUv);
     if (mouseDist < u_injection_radius) {
         float strength = 1.0 - mouseDist / u_injection_radius;
@@ -35,12 +33,14 @@ void main() {
     newVel = clamp(newVel, -0.5, 0.5);
     newDye = clamp(newDye, 0.0, 1.0);
 
-    // Colorize dye
-    vec3 fluidColor = mix(vec3(0.0, 0.1, 0.3), vec3(0.0, 0.8, 1.0), newDye);
+    if (u_state_pass == 1) {
+        fragColor = vec4(newVel, newDye, 1.0);
+        return;
+    }
 
-    // Composite over window
+    // Display pass: composite colored dye over the window.
+    vec3 fluidColor = mix(vec3(0.0, 0.1, 0.3), vec3(0.0, 0.8, 1.0), newDye);
     vec4 win = texture(u_tex, uv);
     vec3 result = mix(fluidColor, win.rgb, win.a);
-
-    fragColor = vec4(newVel, newDye, u_alpha);
+    fragColor = vec4(result, u_alpha);
 }

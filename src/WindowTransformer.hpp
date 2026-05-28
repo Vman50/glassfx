@@ -34,7 +34,13 @@ class GlassFXTransformer : public IWindowTransformer {
     GLuint m_outTex = 0;
     int    m_outW = 0, m_outH = 0;
 
+    // half-resolution blur of input texture, exposed as u_background
+    GLuint m_bgFbo  = 0;
+    GLuint m_bgTex  = 0;
+    int    m_bgW    = 0, m_bgH = 0;
+
     void ensureOutput(int w, int h);
+    void ensureBackground(int w, int h);
     void ensureStateTextures(int w, int h, const std::string& shader);
     void renderQuad(CompiledShader* cs, GLuint inputTexId, GLuint bgTexId, int w, int h);
 };

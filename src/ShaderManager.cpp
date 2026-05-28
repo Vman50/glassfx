@@ -136,9 +136,10 @@ void ShaderManager::onFocusChange(PHLWINDOW window) {
             std::string cur = getShaderName(win);
             if (cur == "desaturate") {
                 std::string ruleShader = g_pConfig->matchWindow(win->m_class, win->m_title);
-                if (ruleShader.empty() || ruleShader == "desaturate") {
+                if (ruleShader.empty())
+                    remove(win);
+                else if (ruleShader != "desaturate")
                     assign(win, ruleShader);
-                }
             }
         }
     }

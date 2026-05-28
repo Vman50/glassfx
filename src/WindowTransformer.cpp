@@ -9,6 +9,7 @@
 #include <hyprland/src/render/OpenGL.hpp>
 
 #include <GLES3/gl32.h>
+#include <algorithm>
 #include <cstring>
 #include <hyprland/src/debug/log/Logger.hpp>
 
@@ -18,6 +19,8 @@ GlassFXTransformer::GlassFXTransformer(PHLWINDOW window, const std::string& shad
 GlassFXTransformer::~GlassFXTransformer() {
     if (m_outFbo) { glDeleteFramebuffers(1, &m_outFbo); m_outFbo = 0; }
     if (m_outTex) { glDeleteTextures(1, &m_outTex); m_outTex = 0; }
+    if (m_bgFbo)  { glDeleteFramebuffers(1, &m_bgFbo); m_bgFbo = 0; }
+    if (m_bgTex)  { glDeleteTextures(1, &m_bgTex); m_bgTex = 0; }
 
     for (int i = 0; i < 2; i++) {
         if (stateTex[i]) { glDeleteTextures(1, &stateTex[i]); stateTex[i] = 0; }
@@ -31,6 +34,33 @@ void GlassFXTransformer::preWindowRender(CSurfacePassElement::SRenderData* pRend
     if (!win) return;
     // Keep focus state updated
     isFocused = g_pCompositor->isWindowActive(win);
+}
+
+void GlassFXTransformer::ensureBackground(int w, int h) {
+    // Blur target is half-resolution for speed.
+    int bw = std::max(1, w / 2);
+    int bh = std::max(1, h / 2);
+    if (m_bgW == bw && m_bgH == bh && m_bgFbo != 0) return;
+
+    if (m_bgFbo) glDeleteFramebuffers(1, &m_bgFbo);
+    if (m_bgTex) glDeleteTextures(1, &m_bgTex);
+
+    glGenTextures(1, &m_bgTex);
+    glBindTexture(GL_TEXTURE_2D, m_bgTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, bw, bh, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glGenFramebuffers(1, &m_bgFbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_bgFbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_bgTex, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    m_bgW = bw;
+    m_bgH = bh;
 }
 
 void GlassFXTransformer::ensureOutput(int w, int h) {
@@ -182,47 +212,58 @@ SP<Render::IFramebuffer> GlassFXTransformer::transform(SP<Render::IFramebuffer> 
 
     try {
         ensureOutput(w, h);
+        ensureBackground(w, h);
 
-        // For stateful shaders, ensure ping-pong textures
         bool isStateful = (m_shaderName == "reaction_diffusion" || m_shaderName == "fluid_sim");
         if (isStateful)
             ensureStateTextures(w, h, m_shaderName);
 
-        glBindFramebuffer(GL_FRAMEBUFFER, m_outFbo);
-        glViewport(0, 0, w, h);
+        GLuint inputTexId = tex->m_texID;
+
+        // Produce a blurred copy of the input for u_background.
+        if (g_pShaderSystem && m_bgFbo)
+            g_pShaderSystem->blurInto(inputTexId, m_bgFbo, m_bgW, m_bgH);
+        GLuint bgTexId = m_bgTex;
+
         glDisable(GL_BLEND);
         glDisable(GL_SCISSOR_TEST);
 
-        GLuint inputTexId = tex->m_texID;
-        GLuint bgTexId = 0;
+        GLint statePassLoc = glGetUniformLocation(cs->program, "u_state_pass");
 
-        // Bind state textures for stateful shaders
         if (isStateful) {
             int src = pingpong;
 
-            // Bind state tex to slot 3
+            // STATE UPDATE PASS: u_state = old state, u_tex = window, target = stateFbo[1-src]
+            glUseProgram(cs->program);
             glActiveTexture(GL_TEXTURE3);
             glBindTexture(GL_TEXTURE_2D, stateTex[src]);
             GLint stateLoc = glGetUniformLocation(cs->program, "u_state");
-            if (stateLoc >= 0) {
-                glUseProgram(cs->program);
-                glUniform1i(stateLoc, 3);
-            }
+            if (stateLoc >= 0) glUniform1i(stateLoc, 3);
+            if (statePassLoc >= 0) glUniform1i(statePassLoc, 1);
 
-            // Render to state output
             glBindFramebuffer(GL_FRAMEBUFFER, stateFbo[1 - src]);
             glViewport(0, 0, w, h);
             renderQuad(cs, inputTexId, bgTexId, w, h);
 
             pingpong = 1 - src;
 
-            // Render visible output to outFbo
+            // DISPLAY PASS: u_state = new state, u_tex = window, target = m_outFbo
+            glUseProgram(cs->program);
+            glActiveTexture(GL_TEXTURE3);
+            glBindTexture(GL_TEXTURE_2D, stateTex[pingpong]);
+            if (stateLoc >= 0) glUniform1i(stateLoc, 3);
+            if (statePassLoc >= 0) glUniform1i(statePassLoc, 0);
+
             glBindFramebuffer(GL_FRAMEBUFFER, m_outFbo);
             glViewport(0, 0, w, h);
-
-            // For display, use the updated state as "tex"
-            renderQuad(cs, stateTex[pingpong], bgTexId, w, h);
+            renderQuad(cs, inputTexId, bgTexId, w, h);
         } else {
+            if (statePassLoc >= 0) {
+                glUseProgram(cs->program);
+                glUniform1i(statePassLoc, 0);
+            }
+            glBindFramebuffer(GL_FRAMEBUFFER, m_outFbo);
+            glViewport(0, 0, w, h);
             renderQuad(cs, inputTexId, bgTexId, w, h);
         }
 

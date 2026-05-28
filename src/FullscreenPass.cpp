@@ -90,13 +90,18 @@ void FullscreenPass::onRenderStage(eRenderStage stage) {
     try {
         ensureCapture(w, h);
 
-        // Capture current framebuffer content
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+        // Snapshot whatever framebuffer Hyprland currently has bound,
+        // not FB 0 (which is rarely what's in use during the render path).
+        GLint prevFb = 0;
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevFb);
+
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, prevFb);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_captureFbo);
         glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
 
-        // Render through fullscreen shader back to main fb
+        // Render the shader back into the framebuffer we captured from.
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prevFb);
         glViewport(0, 0, w, h);
         glDisable(GL_BLEND);
 

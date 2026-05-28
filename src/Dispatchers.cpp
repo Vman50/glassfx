@@ -128,5 +128,5 @@ SDispatchResult dispatchList(std::string) {
         }
     }
     Log::logger->log(Log::DEBUG, "[GlassFX] {}", out);
-    return {};
+    return {true, false, out};
 }

@@ -11,7 +11,7 @@ vec2 barrelDistort(vec2 uv, float k) {
 void main() {
     vec2 uv = barrelDistort(v_uv, u_curvature);
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
-        fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+        fragColor = vec4(0.0, 0.0, 0.0, u_alpha);
         return;
     }
 

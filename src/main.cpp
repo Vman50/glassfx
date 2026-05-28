@@ -9,7 +9,9 @@
 #include "Dispatchers.hpp"
 
 // Force export of the API version hash symbol required by hyprpm
-extern "C" EXPORT const char* __hyprland_api_get_client_hash_ref = __hyprland_api_get_client_hash();
+extern "C" {
+    EXPORT const char* __hyprland_api_get_client_hash_ref = __hyprland_api_get_client_hash();
+}
 
 ShaderSystem*   g_pShaderSystem   = nullptr;
 ShaderManager*  g_pShaderManager  = nullptr;

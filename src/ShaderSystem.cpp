@@ -45,9 +45,6 @@ ShaderSystem::ShaderSystem() {
 
     const char* home = getenv("HOME");
     m_userShaderDir   = home ? std::string(home) + "/.config/hypr/shaders/glassfx" : "";
-
-    // Determine builtin dir relative to plugin SO
-    m_builtinShaderDir = "/usr/share/glassfx/shaders";
 }
 
 ShaderSystem::~ShaderSystem() {
@@ -56,18 +53,13 @@ ShaderSystem::~ShaderSystem() {
 
 void ShaderSystem::init() {
     generateNoise();
+    compileBlurProgram();
 
     if (!m_userShaderDir.empty())
         fs::create_directories(m_userShaderDir);
 
-    // Load builtin shaders from plugin installation path
-    std::string pluginShadersDir = std::string(getenv("HOME") ? getenv("HOME") : "") +
-                                   "/.config/hypr/shaders/glassfx";
-
-    scanDirectory(pluginShadersDir);
-
-    // Also scan the source tree shaders directory (for development)
-    scanDirectory("/home/vinceg/glassde/shaders/effects");
+    if (!m_userShaderDir.empty())
+        scanDirectory(m_userShaderDir);
 }
 
 void ShaderSystem::shutdown() {
@@ -82,7 +74,13 @@ void ShaderSystem::shutdown() {
 
     if (m_noiseTex) { glDeleteTextures(1, &m_noiseTex); m_noiseTex = 0; }
 
-    if (m_inotifyFd >= 0) { close(m_inotifyFd); m_inotifyFd = -1; }
+    if (m_blurProgram) { glDeleteProgram(m_blurProgram); m_blurProgram = 0; }
+    if (m_blurVao)     { glDeleteVertexArrays(1, &m_blurVao); m_blurVao = 0; }
+    if (m_blurVbo)     { glDeleteBuffers(1, &m_blurVbo); m_blurVbo = 0; }
+
+    // m_inotifyFd is owned by the EventLoop's CFileDescriptor after startInotify();
+    // do not close() it here or we'll double-close.
+    m_inotifyFd = -1;
 }
 
 void ShaderSystem::startInotify() {
@@ -121,8 +119,8 @@ void ShaderSystem::onInotifyReadable() {
 
 void ShaderSystem::scanDirectory(const std::string& dir) {
     if (!fs::exists(dir)) return;
-    for (auto& entry : fs::directory_iterator(dir)) {
-        if (entry.path().extension() == ".frag")
+    for (auto& entry : fs::recursive_directory_iterator(dir)) {
+        if (entry.is_regular_file() && entry.path().extension() == ".frag")
             loadFile(entry.path().string());
     }
 }
@@ -160,14 +158,25 @@ bool ShaderSystem::loadFile(const std::string& path) {
         fb.params = cs.params;
         if (!compileShader(fb, PASSTHROUGH_FRAG)) return false;
         std::lock_guard<std::mutex> lock(m_mutex);
+        releaseShader(fb.name);
         m_shaders[fb.name] = std::move(fb);
         return false;
     }
 
     std::lock_guard<std::mutex> lock(m_mutex);
+    releaseShader(cs.name);
     m_shaders[cs.name] = std::move(cs);
     Log::logger->log(Log::DEBUG, "[GlassFX] Loaded shader: {}", m_shaders[cs.name].name);
     return true;
+}
+
+void ShaderSystem::releaseShader(const std::string& name) {
+    auto it = m_shaders.find(name);
+    if (it == m_shaders.end()) return;
+    auto& cs = it->second;
+    if (cs.program) { glDeleteProgram(cs.program); cs.program = 0; }
+    if (cs.vao)     { glDeleteVertexArrays(1, &cs.vao); cs.vao = 0; }
+    if (cs.vbo)     { glDeleteBuffers(1, &cs.vbo); cs.vbo = 0; }
 }
 
 void ShaderSystem::parseMetadata(CompiledShader& cs, const std::string& src) {
@@ -231,14 +240,23 @@ void ShaderSystem::parseMetadata(CompiledShader& cs, const std::string& src) {
 void ShaderSystem::parseParamValue(const std::string& v, ParamType type, float* out) {
     out[0] = out[1] = out[2] = out[3] = 0.0f;
     if (type == ParamType::COLOR) {
-        // #rrggbbaa or #rrggbb
-        std::string hex = v.substr(1); // remove '#'
-        while (hex.size() < 8) hex += "ff";
-        unsigned long val = std::stoul(hex.substr(0, 8), nullptr, 16);
-        out[0] = ((val >> 24) & 0xff) / 255.0f;
-        out[1] = ((val >> 16) & 0xff) / 255.0f;
-        out[2] = ((val >>  8) & 0xff) / 255.0f;
-        out[3] = ((val >>  0) & 0xff) / 255.0f;
+        // Accept #rgb, #rgba, #rrggbb, #rrggbbaa
+        if (v.empty() || v[0] != '#') return;
+        std::string hex = v.substr(1);
+        std::string norm;
+        if (hex.size() == 3 || hex.size() == 4) {
+            for (char c : hex) { norm += c; norm += c; }
+        } else {
+            norm = hex;
+        }
+        if (norm.size() < 8) norm.append(8 - norm.size(), 'f'); // default alpha=0xff
+        try {
+            unsigned long val = std::stoul(norm.substr(0, 8), nullptr, 16);
+            out[0] = ((val >> 24) & 0xff) / 255.0f;
+            out[1] = ((val >> 16) & 0xff) / 255.0f;
+            out[2] = ((val >>  8) & 0xff) / 255.0f;
+            out[3] = ((val >>  0) & 0xff) / 255.0f;
+        } catch (...) {}
         return;
     }
     std::istringstream ss(v);
@@ -292,6 +310,7 @@ uniform float u_time;
 uniform float u_alpha;
 uniform int u_focused;
 uniform vec2 u_mouse;
+uniform int u_state_pass;
 in vec2 v_uv;
 out vec4 fragColor;
 )GLSL";
@@ -393,6 +412,101 @@ void ShaderSystem::buildQuadGeometry(CompiledShader& cs) {
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), (void*)(2*sizeof(float)));
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+void ShaderSystem::compileBlurProgram() {
+    static const char* BLUR_FRAG = R"GLSL(
+#version 300 es
+precision highp float;
+uniform sampler2D u_tex;
+uniform vec2 u_resolution;
+in vec2 v_uv;
+out vec4 fragColor;
+void main() {
+    vec2 px = 1.0 / u_resolution;
+    vec3 sum = vec3(0.0);
+    // 13-tap separable-equivalent Gaussian via dual-bilinear taps
+    const float w0 = 0.227027;
+    const float w1 = 0.316216;
+    const float w2 = 0.070270;
+    sum += texture(u_tex, v_uv).rgb * w0;
+    sum += texture(u_tex, v_uv + vec2( 1.3846 * px.x, 0.0)).rgb * w1;
+    sum += texture(u_tex, v_uv + vec2(-1.3846 * px.x, 0.0)).rgb * w1;
+    sum += texture(u_tex, v_uv + vec2( 3.2308 * px.x, 0.0)).rgb * w2;
+    sum += texture(u_tex, v_uv + vec2(-3.2308 * px.x, 0.0)).rgb * w2;
+    sum += texture(u_tex, v_uv + vec2(0.0,  1.3846 * px.y)).rgb * w1;
+    sum += texture(u_tex, v_uv + vec2(0.0, -1.3846 * px.y)).rgb * w1;
+    sum += texture(u_tex, v_uv + vec2(0.0,  3.2308 * px.y)).rgb * w2;
+    sum += texture(u_tex, v_uv + vec2(0.0, -3.2308 * px.y)).rgb * w2;
+    // weights above sum to ~1.76; normalize
+    fragColor = vec4(sum / 1.760216, 1.0);
+}
+)GLSL";
+
+    GLuint vert = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(vert, 1, &VERT_SRC, nullptr);
+    glCompileShader(vert);
+
+    GLuint frag = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(frag, 1, &BLUR_FRAG, nullptr);
+    glCompileShader(frag);
+
+    m_blurProgram = glCreateProgram();
+    glAttachShader(m_blurProgram, vert);
+    glAttachShader(m_blurProgram, frag);
+    glBindAttribLocation(m_blurProgram, 0, "a_pos");
+    glBindAttribLocation(m_blurProgram, 1, "a_uv");
+    glLinkProgram(m_blurProgram);
+
+    GLint ok = 0;
+    glGetProgramiv(m_blurProgram, GL_LINK_STATUS, &ok);
+    glDeleteShader(vert);
+    glDeleteShader(frag);
+    if (!ok) {
+        char log[1024];
+        glGetProgramInfoLog(m_blurProgram, sizeof(log), nullptr, log);
+        Log::logger->log(Log::ERR, "[GlassFX] Blur program link error: {}", log);
+        glDeleteProgram(m_blurProgram);
+        m_blurProgram = 0;
+        return;
+    }
+
+    m_blurULoc_tex        = glGetUniformLocation(m_blurProgram, "u_tex");
+    m_blurULoc_resolution = glGetUniformLocation(m_blurProgram, "u_resolution");
+
+    float verts[] = {
+        -1.0f,  1.0f,  0.0f, 0.0f,
+        -1.0f, -1.0f,  0.0f, 1.0f,
+         1.0f,  1.0f,  1.0f, 0.0f,
+         1.0f, -1.0f,  1.0f, 1.0f,
+    };
+    glGenVertexArrays(1, &m_blurVao);
+    glGenBuffers(1, &m_blurVbo);
+    glBindVertexArray(m_blurVao);
+    glBindBuffer(GL_ARRAY_BUFFER, m_blurVbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), (void*)(2*sizeof(float)));
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+void ShaderSystem::blurInto(GLuint srcTex, GLuint dstFbo, int dstW, int dstH) {
+    if (!m_blurProgram || !srcTex || !dstFbo) return;
+    glBindFramebuffer(GL_FRAMEBUFFER, dstFbo);
+    glViewport(0, 0, dstW, dstH);
+    glDisable(GL_BLEND);
+    glUseProgram(m_blurProgram);
+    glBindVertexArray(m_blurVao);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, srcTex);
+    if (m_blurULoc_tex >= 0)        glUniform1i(m_blurULoc_tex, 0);
+    if (m_blurULoc_resolution >= 0) glUniform2f(m_blurULoc_resolution, (float)dstW, (float)dstH);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glBindVertexArray(0);
+    glUseProgram(0);
 }
 
 void ShaderSystem::generateNoise() {
