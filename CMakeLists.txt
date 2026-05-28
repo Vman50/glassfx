@@ -37,6 +37,7 @@ target_link_libraries(glassfx PRIVATE
     ${GLESV2_LIBRARIES}
     ${EGL_LIBRARIES}
     ${WAYLAND_SERVER_LIBRARIES}
+    -Wl,--allow-shlib-undefined
 )
 
 target_compile_options(glassfx PRIVATE
