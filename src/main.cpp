@@ -52,6 +52,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO pluginInit(HANDLE handle) {
     HyprlandAPI::addDispatcherV2(handle, "glassfx_reload", dispatchReload);
     HyprlandAPI::addDispatcherV2(handle, "glassfx_clear",  dispatchClear);
     HyprlandAPI::addDispatcherV2(handle, "glassfx_list",   dispatchList);
+    HyprlandAPI::addDispatcherV2(handle, "glassfx_tune",   dispatchShorthand);
 
     // Subscribe to events
     s_openListener = Event::bus()->m_events.window.open.listen([](PHLWINDOW w) {
@@ -128,4 +129,5 @@ APICALL EXPORT void pluginExit() {
     HyprlandAPI::removeDispatcher(g_pHandle, "glassfx_reload");
     HyprlandAPI::removeDispatcher(g_pHandle, "glassfx_clear");
     HyprlandAPI::removeDispatcher(g_pHandle, "glassfx_list");
+    HyprlandAPI::removeDispatcher(g_pHandle, "glassfx_tune");
 }

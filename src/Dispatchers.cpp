@@ -7,6 +7,7 @@
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
+#include <hyprland/src/render/Renderer.hpp>
 #include <sstream>
 #include <hyprland/src/debug/log/Logger.hpp>
 
@@ -83,10 +84,34 @@ SDispatchResult dispatchParam(std::string args) {
     return {};
 }
 
+static void damageAllWindows() {
+    if (!g_pHyprRenderer) return;
+    for (auto& win : g_pCompositor->m_windows)
+        if (win && win->m_isMapped)
+            g_pHyprRenderer->damageWindow(win);
+}
+
 // glassfx_reload
 SDispatchResult dispatchReload(std::string) {
     if (g_pShaderSystem)
         g_pShaderSystem->reloadAll();
+    damageAllWindows();
+    return {};
+}
+
+// glassfx <shader> <param> <value>  — shorthand for glassfx_param + live redraw
+SDispatchResult dispatchShorthand(std::string args) {
+    std::istringstream ss(args);
+    std::string shaderName, paramName, value;
+    ss >> shaderName >> paramName >> value;
+
+    if (shaderName.empty() || paramName.empty() || value.empty())
+        return {false, false, "Usage: glassfx <shader> <param> <value>"};
+
+    if (!g_pShaderSystem->setParam(shaderName, paramName, value))
+        return {false, false, "Param not found: " + shaderName + "." + paramName};
+
+    damageAllWindows();
     return {};
 }
 

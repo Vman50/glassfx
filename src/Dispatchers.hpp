@@ -8,3 +8,4 @@ SDispatchResult dispatchParam(std::string args);
 SDispatchResult dispatchReload(std::string args);
 SDispatchResult dispatchClear(std::string args);
 SDispatchResult dispatchList(std::string args);
+SDispatchResult dispatchShorthand(std::string args);
