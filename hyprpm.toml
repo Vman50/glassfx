@@ -5,5 +5,5 @@ authors = ["Vman50"]
 [glassfx]
 description = "Per-window GLSL shader system for Hyprland"
 authors = ["Vman50"]
-output = "build/libglassfx.so"
-build = ["cmake -B build", "cmake --build build"]
+output = "libglassfx.so"
+build = ["cmake -B build", "cmake --build build", "cp build/libglassfx.so libglassfx.so"]
